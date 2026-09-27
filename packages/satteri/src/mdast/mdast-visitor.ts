@@ -85,6 +85,7 @@ import {
   asArray,
   collectCommands,
   FOREIGN_REF,
+  foreignContentError,
   makeRequireNid,
   requireRootReplacement,
   ROOT_NODE_ID,
@@ -199,15 +200,21 @@ export class MdastVisitorContext {
   }
 
   insertBefore(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertBefore", this.#refs);
-    for (const n of asArray(newNode))
-      emitMdastTree(this.#commandBuffer, "insertBefore", id, n, false, this.#refs);
+    this.#splice(
+      requireNid(node as MdastNode, "insertBefore", this.#refs),
+      newNode,
+      "insertBefore",
+    );
   }
 
   insertAfter(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "insertAfter", this.#refs);
-    for (const n of asArray(newNode))
-      emitMdastTree(this.#commandBuffer, "insertAfter", id, n, false, this.#refs);
+    this.#splice(requireNid(node as MdastNode, "insertAfter", this.#refs), newNode, "insertAfter");
+  }
+
+  #splice(anchorId: number, content: MdastContent | MdastContent[], op: StructuralOp): void {
+    for (const n of asArray(content)) {
+      emitMdastTree(this.#commandBuffer, op, anchorId, n, false, this.#refs, true);
+    }
   }
 
   /**
@@ -228,15 +235,19 @@ export class MdastVisitorContext {
   }
 
   prependChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "prependChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitMdastTree(this.#commandBuffer, "prependChild", id, n, false, this.#refs);
+    this.#splice(
+      requireNid(node as MdastNode, "prependChild", this.#refs),
+      childNode,
+      "prependChild",
+    );
   }
 
   appendChild(node: Readonly<MdastTarget>, childNode: MdastContent | MdastContent[]): void {
-    const id = requireNid(node as MdastNode, "appendChild", this.#refs);
-    for (const n of asArray(childNode))
-      emitMdastTree(this.#commandBuffer, "appendChild", id, n, false, this.#refs);
+    this.#splice(
+      requireNid(node as MdastNode, "appendChild", this.#refs),
+      childNode,
+      "appendChild",
+    );
   }
 
   /** Insert one node or an array at `index`; clamps (`0` or less prepends, past the end appends). */
@@ -246,13 +257,13 @@ export class MdastVisitorContext {
     childNode: MdastContent | MdastContent[],
   ): void {
     const children = ("children" in node ? node.children : undefined) ?? [];
-    if (index <= 0 || children.length === 0) {
-      this.prependChild(node, childNode);
-    } else if (index >= children.length) {
-      this.appendChild(node, childNode);
-    } else {
-      this.insertBefore(children[index]!, childNode);
-    }
+    const [anchor, op] =
+      index <= 0 || children.length === 0
+        ? ([node, "prependChild"] as const)
+        : index >= children.length
+          ? ([node, "appendChild"] as const)
+          : ([children[index]!, "insertBefore"] as const);
+    this.#splice(requireNid(anchor as MdastNode, "insertChildAt", this.#refs), childNode, op);
   }
 
   /** Remove the `index`-th child of `node`; a no-op when there is no such child. */
@@ -269,13 +280,30 @@ export class MdastVisitorContext {
    */
   replaceNode(node: Readonly<MdastTarget>, newNode: MdastContent | MdastContent[]): void {
     const id = requireNid(node as MdastNode, "replaceNode", this.#refs);
+    const onlyReplacement = Array.isArray(newNode)
+      ? newNode.length === 1
+        ? newNode[0]
+        : undefined
+      : newNode;
+    if (
+      id === ROOT_NODE_ID &&
+      onlyReplacement !== undefined &&
+      reusedId(onlyReplacement, this.#refs) === id
+    ) {
+      return;
+    }
     if (Array.isArray(newNode)) {
       if (id === ROOT_NODE_ID && newNode.length > 1) throw rootReplacementError(newNode);
-      // Replace last so earlier insertions can still reference the target node.
+      // One command, so the node's replacement is its whole slot and a ref back
+      // to it resolves to all of it rather than to the last element.
+      if (id !== ROOT_NODE_ID && newNode.length > 1 && newNode.every(isPlainReplacement)) {
+        emitMdastMultiReplace(this.#commandBuffer, id, newNode, this.#refs);
+        return;
+      }
       let previous: MdastContent | undefined;
       for (const n of newNode) {
         if (previous !== undefined) {
-          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs);
+          emitMdastTree(this.#commandBuffer, "insertBefore", id, previous, false, this.#refs, true);
         }
         previous = n;
       }
@@ -284,7 +312,7 @@ export class MdastVisitorContext {
       } else if (id === ROOT_NODE_ID && !isRawMdastContent(previous)) {
         emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(previous), this.#refs);
       } else {
-        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs);
+        emitMdastTree(this.#commandBuffer, "replace", id, previous, true, this.#refs, true);
       }
       if (previous !== undefined && !isRawMdastContent(previous)) {
         this.#pendingNodes.set(id, previous);
@@ -295,11 +323,11 @@ export class MdastVisitorContext {
     }
     if (id === ROOT_NODE_ID && !isRawMdastContent(newNode)) {
       emitMdastRootReplace(this.#commandBuffer, requireRootReplacement(newNode), this.#refs);
-    } else {
-      emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs);
+      return;
     }
     if (isRawMdastContent(newNode)) this.#pendingNodes.delete(id);
     else this.#pendingNodes.set(id, newNode);
+    emitMdastTree(this.#commandBuffer, "replace", id, newNode, true, this.#refs, true);
   }
 
   setField<N extends MdastTarget, K extends SettableScalarFieldKey<N>>(
@@ -620,6 +648,30 @@ function emitMdastChildrenCommand(
   });
 }
 
+/** True for content the op-stream can carry inside one root-wrapped payload. */
+function isPlainReplacement(content: MdastContent): boolean {
+  return (
+    !isRawMdastContent(content) && (content as { _keepChildren?: unknown })._keepChildren !== true
+  );
+}
+
+/** Replace `id` with several nodes in one command, root-wrapped so the engine
+ *  splices the children in place of the node. */
+function emitMdastMultiReplace(
+  buffer: CommandBuffer,
+  id: number,
+  nodes: readonly MdastContent[],
+  refs: NodeRefs,
+): void {
+  const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, id, () => {
+    buffer.open(MDAST_ROOT);
+    for (const n of nodes) if (!emitMdastOp(buffer, n, false, true, refs)) return false;
+    buffer.close();
+    return true;
+  });
+  if (!ok) throw unencodableContentError(nodes);
+}
+
 // Root replacement needs a separate encoder because per-node encoding rejects root payloads.
 function emitMdastRootReplace(buffer: CommandBuffer, root: MdastContent, refs: NodeRefs): void {
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD.replace, ROOT_NODE_ID, () =>
@@ -649,14 +701,14 @@ function emitMdastOp(
   isRoot: boolean,
   forReplace: boolean,
   refs: NodeRefs,
+  allowRootRef = false,
 ): boolean {
   if (node === null || typeof node !== "object") return false;
-  if (!isRoot) {
-    const id = reusedId(node, refs);
-    if (id !== undefined) {
-      w.ref(id);
-      return true;
-    }
+  const id = getNodeId(node as MdastNode, refs);
+  if (id === FOREIGN_REF) throw foreignContentError();
+  if ((!isRoot || allowRootRef) && id !== undefined) {
+    w.ref(id);
+    return true;
   }
   const n = node as Record<string, unknown>;
   let type = MDAST_OPSTREAM_TYPES[n.type as string];
@@ -758,6 +810,7 @@ function emitMdastTree(
   content: MdastContent,
   forReplace: boolean,
   refs: NodeRefs,
+  allowRootRef = false,
 ): void {
   if (isRawMdastContent(content)) {
     switch (op) {
@@ -776,7 +829,7 @@ function emitMdastTree(
     }
   }
   const ok = buffer.emitOpstreamCommand(STRUCTURAL_CMD[op], id, () =>
-    emitMdastOp(buffer, content, true, forReplace, refs),
+    emitMdastOp(buffer, content, true, forReplace, refs, allowRootRef),
   );
   if (!ok) throw unencodableContentError(content);
 }
@@ -857,7 +910,7 @@ function applyMdastVisitResult(
         returnBuffer.setProperty(nodeId, "value", node.value);
         break;
       }
-      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs);
+      emitMdastTree(returnBuffer, "replace", nodeId, node as MdastContent, true, refs, true);
       break;
     }
   }

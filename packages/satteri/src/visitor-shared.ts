@@ -83,6 +83,12 @@ export type NodeRefs = WeakMap<object, number>;
 /** Separates "belongs to another tree" from "never had an id"; arena ids are never negative. */
 export const FOREIGN_REF = -1;
 
+export function foreignContentError(): Error {
+  return new Error(
+    "satteri: content contains a node from another tree or pass; use structuredClone(node) to insert a detached copy.",
+  );
+}
+
 /** `_refs` rides on the prototype, surviving neither a spread copy nor an object literal. */
 export function crossPipelineForeign(node: object): number | undefined {
   // Probed before the own-property call: plugin-built content misses here, and that is the hot case.
