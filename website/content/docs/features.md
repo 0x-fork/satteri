@@ -15,7 +15,7 @@ markdownToHtml(source, {
     gfm: true,
     frontmatter: true,
     math: false,
-    headingAttributes: false,
+    attributes: false,
     directive: false,
     superscript: false,
     subscript: false,
@@ -142,11 +142,7 @@ Sätteri does not currently parse the TOML or YAML.
 
 ## Heading attributes
 
-Default: `false`.
-
-```ts
-headingAttributes?: boolean
-```
+Enabled by [`attributes`](#attributes). The older `headingAttributes` flag still enables heading attributes on their own, but it is deprecated.
 
 Recognizes curly-brace attribute syntax on headings:
 
@@ -203,6 +199,29 @@ MDX treats `{...}` as a JavaScript expression, which normally collides with the 
 ```
 
 A `{...}` that *is* valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
+
+## Attributes
+
+Default: `false`.
+
+```ts
+attributes?: boolean
+```
+
+Recognizes curly-brace attributes on more elements than headings, with the [heading attribute](#heading-attributes) syntax and merge rules. It also turns on heading attributes. Attributes on fenced code blocks follow the info string and go on the `<code>`:
+
+````markdown
+```js {.highlight #example data-line=3}
+console.log("hi");
+```
+````
+
+```html
+<pre><code class="highlight language-js" id="example" data-line="3">console.log("hi");
+</code></pre>
+```
+
+The language is written before the braces, so its class comes first, holding any attribute classes followed by `language-js`. Only a block that ends the info string counts; text before it stays in the code's `meta`.
 
 ## Directives
 
