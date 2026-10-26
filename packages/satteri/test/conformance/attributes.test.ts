@@ -7,8 +7,13 @@ import { markdownToHtml } from "../../src/index.js";
 // Its default moves fence attributes to `<pre>`; Sätteri keeps them on `<code>`, as mdast-util-to-hast does.
 const reference = new MarkdownIt().use(markdownItAttrs, { fenceAttrsOnPre: false });
 
+// markdown-it renders strikethrough as `<s>` where remark and Sätteri use `<del>`,
+// whatever the attributes.
 function referenceHtml(md: string): string {
-  return reference.render(md).trim();
+  return reference
+    .render(md)
+    .trim()
+    .replace(/<(\/?)s([ >])/g, "<$1del$2");
 }
 
 function satteriHtml(md: string): string {
@@ -31,6 +36,18 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     ["fence: a block that doesn't end the info string", "```js {.a} extra\nx\n```"],
     ["fence: an empty block", "```js {}\nx\n```"],
     ["fence: an unclosed block", "```js {.a\nx\n```"],
+    ["inline: emphasis, strong and a code span", "*em*{.a} **strong**{#b} `code`{c=d}"],
+    [
+      "inline: link, image and reference link",
+      "[link](/u){.a} ![alt](/i.png){.b} [ref][r]{#c}\n\n[r]: /r",
+    ],
+    ["inline: strikethrough", "~~gone~~{.x}"],
+    ["inline: nested elements", "**a *b*{.in}**{.out}"],
+    ["inline: blocks that follow one another merge", "*em*{.a}{#i}{.b k=v}"],
+    ["inline: markup characters inside a block", "*em*{.a_b}"],
+    ["inline: a block after a space or plain text stays text", "*em* {.a} text{.b} more"],
+    ["inline: an escaped, empty or unclosed block stays text", "*em*\\{.c} *em*{} *em*{.d"],
+    ["inline: collapsed references", "[ref][]{.a} ![ref][]{.b}\n\n[ref]: /u"],
   ];
 
   for (const [name, md] of CASES) {
