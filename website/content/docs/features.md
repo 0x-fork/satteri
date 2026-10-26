@@ -198,7 +198,7 @@ MDX treats `{...}` as a JavaScript expression, which normally collides with the 
 # Welcome {name}
 ```
 
-A `{...}` that *is* valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
+A `{...}` that _is_ valid JavaScript stays an expression even when it looks like attributes: `{hidden}`, `{level=2}` and `{title="Home"}` evaluate rather than apply — silently, and unlike in plain Markdown. Add a `#`/`.` shorthand to force attributes; `{#id hidden}` applies both.
 
 ## Attributes
 
@@ -233,7 +233,40 @@ Attributes on an inline element follow it with no space between: emphasis, stron
 <p><strong class="warning">Note</strong> see <a href="/guide" target="_blank">the guide</a> and <code class="cmd" id="install">npm i</code></p>
 ```
 
-In MDX, a `{...}` after an inline element is still a JavaScript expression.
+A block ending a paragraph's last line goes on the paragraph, or on the list item from the item's first line. A block on a line of its own goes on the block it's written after, at the level its `>` markers and indentation put it, as kramdown places a block IAL: written inside the blockquotes and list items around the paragraph, it goes on the paragraph (on its list item, in a tight list); written lazily outside some of them, it goes on the outermost it leaves, a list item giving its list. A paragraph holding only a block goes on the list, table or thematic break before it, and a block ending a table cell goes on the cell:
+
+```text
+- Milk {.fresh}
+- Eggs
+{.groceries}
+
+| Item {.name} |
+| --- |
+| Milk |
+
+{.inventory}
+```
+
+```html
+<ul class="groceries">
+  <li class="fresh">Milk</li>
+  <li>Eggs</li>
+</ul>
+<table class="inventory">
+  <thead>
+    <tr>
+      <th class="name">Item</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Milk</td>
+    </tr>
+  </tbody>
+</table>
+```
+
+In MDX, a `{...}` after an inline element or ending a paragraph is still a JavaScript expression.
 
 ## Directives
 

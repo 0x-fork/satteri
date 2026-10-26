@@ -7,19 +7,20 @@ import { markdownToHtml } from "../../src/index.js";
 // Its default moves fence attributes to `<pre>`; Sätteri keeps them on `<code>`, as mdast-util-to-hast does.
 const reference = new MarkdownIt().use(markdownItAttrs, { fenceAttrsOnPre: false });
 
-// markdown-it renders strikethrough as `<s>` where remark and Sätteri use `<del>`,
-// whatever the attributes.
+// Line breaks between block tags differ between the renderers, whatever the attributes.
+function collapseTagWhitespace(html: string): string {
+  return html.trim().replace(/>\s+</g, "><");
+}
+
+// markdown-it renders strikethrough as `<s>` where remark and Sätteri use `<del>`.
 function referenceHtml(md: string): string {
-  return reference
-    .render(md)
-    .trim()
-    .replace(/<(\/?)s([ >])/g, "<$1del$2");
+  return collapseTagWhitespace(reference.render(md)).replace(/<(\/?)s([ >])/g, "<$1del$2");
 }
 
 function satteriHtml(md: string): string {
   const result = markdownToHtml(md, { features: { attributes: true } });
   if (result instanceof Promise) throw new Error("expected sync");
-  return result.html.trim();
+  return collapseTagWhitespace(result.html);
 }
 
 describe("attributes: conformance vs markdown-it-attrs", () => {
@@ -43,10 +44,44 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     ],
     ["inline: strikethrough", "~~gone~~{.x}"],
     ["inline: nested elements", "**a *b*{.in}**{.out}"],
+    [
+      "inline: an element ending a heading takes the block",
+      "# Title **b**{.x}\n\n## See [the guide](/g){.y}",
+    ],
     ["inline: blocks that follow one another merge", "*em*{.a}{#i}{.b k=v}"],
     ["inline: markup characters inside a block", "*em*{.a_b}"],
     ["inline: a block after a space or plain text stays text", "*em* {.a} text{.b} more"],
     ["inline: an escaped, empty or unclosed block stays text", "*em*\\{.c} *em*{} *em*{.d"],
+    ["block: ending a paragraph's last line", "A paragraph. {.intro}"],
+    ["block: a paragraph's last line of its own", "Another\n{#second}"],
+    ["block: a line of its own after a hard break", "line\\\n{.x}"],
+    ["block: a list item's first line", "- item {.red}\n- item"],
+    ["block: a lazy line of its own after a list item goes on the list", "- a\n- b\n{.my-list}"],
+    ["block: in a nested list item, the nested list", "- parent\n  - child\n  {.inner}"],
+    [
+      "block: nested lists take blocks by indentation",
+      "- item 1{.a}\n  - nested item {.b}\n  {.c}\n    1. nested nested item {.d}\n    {.e}",
+    ],
+    [
+      "block: a paragraph of its own goes on the outer list",
+      "- item\n  - nested\n  {.red}\n\n{.blue}",
+    ],
+    ["block: a lazy line of its own after a blockquote goes on it", "> quote\n{.c}"],
+    [
+      "block: a line of its own before more blocks goes on the paragraph",
+      "> para\n> {.x}\n>\n> more",
+    ],
+    ["block: a paragraph of its own after a list", "- a\n- b\n\n{.my-list}"],
+    [
+      "block: table cells and a paragraph of its own after the table",
+      "| Head {.h} |\n| --- |\n| cell {.c} |\n\n{.my-table}",
+    ],
+    ["block: a paragraph of its own anywhere else stays, empty", "# H\n\n{.alone}"],
+    ["block: only the last of several blocks ending a paragraph", "text{.a}{.b}"],
+    ["block: a block mid-paragraph stays text", "para\n{.x}\nmore"],
+    ["block: braces in image alt text", "![{.cls}](x.png)"],
+    ["block: an inline element before the block takes it", "![alt](img.png){.img-class}"],
+    ["block: after markup left as text", "see [brackets]{.a}\n\nfoo_{.b}\n\n# see [brackets]{.c}"],
     ["inline: collapsed references", "[ref][]{.a} ![ref][]{.b}\n\n[ref]: /u"],
   ];
 
@@ -66,5 +101,66 @@ describe("attributes: conformance vs markdown-it-attrs", () => {
     expect(referenceHtml(md)).toBe(
       '<pre><code id="code-block" class="language-python">x\n</code></pre>',
     );
+  });
+
+  // A line of its own goes on the block it's written after, at the level its `>`
+  // markers and indentation put it, as kramdown places a block IAL. markdown-it
+  // drops a line's indentation before plugins see it, so markdown-it-attrs gives
+  // the line to the outermost block that ends with the paragraph; its author
+  // describes the indentation rule as the one they wanted (markdown-it-attrs#32).
+  const OWN_LINE: Array<[string, string, string, string]> = [
+    [
+      "in a blockquote, the paragraph",
+      "> quoted\n> {.note}",
+      '<blockquote><p class="note">quoted</p></blockquote>',
+      '<blockquote class="note"><p>quoted</p></blockquote>',
+    ],
+    [
+      "in the outer of two blockquotes, the inner",
+      "> > nested\n> {.inner}",
+      '<blockquote><blockquote class="inner"><p>nested</p></blockquote></blockquote>',
+      '<blockquote class="inner"><blockquote><p>nested</p></blockquote></blockquote>',
+    ],
+    [
+      "in a tight list item, the item",
+      "- a\n  {.x}",
+      '<ul><li class="x">a</li></ul>',
+      '<ul class="x"><li>a</li></ul>',
+    ],
+    [
+      "in a loose list item, the paragraph",
+      "- a\n\n  para\n  {.x}",
+      '<ul><li><p>a</p><p class="x">para</p></li></ul>',
+      '<ul class="x"><li><p>a</p><p>para</p></li></ul>',
+    ],
+    [
+      "in a blockquote in a list item, the paragraph",
+      "- a\n  > q\n  > {.x}",
+      '<ul><li>a\n<blockquote><p class="x">q</p></blockquote></li></ul>',
+      '<ul class="x"><li>a\n<blockquote><p>q</p></blockquote></li></ul>',
+    ],
+  ];
+
+  for (const [name, md, ours, theirs] of OWN_LINE) {
+    test(`block: a line of its own ${name}, unlike the reference`, () => {
+      expect(satteriHtml(md)).toBe(ours);
+      expect(referenceHtml(md)).toBe(theirs);
+    });
+  }
+
+  // A paragraph of attributes alone goes on a thematic break before it, as on a
+  // list or table; markdown-it-attrs keeps it as an empty paragraph there.
+  test("block: a paragraph of its own after a thematic break, unlike the reference", () => {
+    const md = "---\n{.divider}";
+    expect(satteriHtml(md)).toBe('<hr class="divider">');
+    expect(referenceHtml(md)).toBe('<hr><p class="divider"></p>');
+  });
+
+  // `--- {.x}` isn't a thematic break in CommonMark, so it's a paragraph with
+  // attributes; markdown-it-attrs reads it as a thematic break.
+  test("block: `--- {.x}` is a paragraph, unlike the reference", () => {
+    const md = "--- {.divider}";
+    expect(satteriHtml(md)).toBe('<p class="divider">---</p>');
+    expect(referenceHtml(md)).toBe('<hr class="divider">');
   });
 });
